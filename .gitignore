@@ -1,0 +1,39 @@
+# Environment file (contains local paths)
+.env
+
+# Docker / Runtime
+docker-compose.override.yml
+
+# Runtime logs
+*.log
+
+# Cache directories (host-side, bind-mounted anyway)
+.cache/
+.triton/
+
+# prepare-hybrid writes its log to logs/; mia/__pycache__ appears when the
+# mia/ scripts run their local self-test.
+logs/
+mia/__pycache__/
+
+# Mia/hybrid layer: build intermediates (extracted from the image / patched)
+mia/mtp_patched.py.orig
+mia/mtp_patched.py
+mia/vllm_ple_mmap_patched.py.orig
+mia/vllm_ple_mmap_patched.py
+
+# Generated vocabulary variants; the public release input remains versioned.
+mia/draft_vocab*.txt
+!mia/draft_vocab_public.txt
+*.provenance.local.json
+
+# tools/draft-vocab: the building blocks are in the repo, their outputs are not.
+# corpus/ and cache/ are generated; .venv is a local dependency environment,
+# redact_terms.json may contain local terms (template: redact_terms.example.json).
+tools/draft-vocab/corpus/
+tools/draft-vocab/cache/
+tools/draft-vocab/.venv/
+tools/draft-vocab/redact_terms.json
+tools/draft-vocab/*.log
+
+__pycache__/

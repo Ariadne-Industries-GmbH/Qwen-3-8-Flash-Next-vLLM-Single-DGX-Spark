@@ -1,0 +1,126 @@
+{
+  "qwen-3-8-flash-medium": {
+    "url": "http://localhost:44415/v1",
+    "temperature": 1.0,
+    "input_modalities": [
+      "text",
+      "image"
+    ],
+    "output_modalities": [
+      "text"
+    ],
+    "provider": "vllm",
+    "reasoning_effort": "medium",
+    "reasoning": {
+      "replay_history": true,
+      "history_field": "reasoning",
+      "forward_reasoning_effort": true,
+      "enable_thinking": true,
+      "preserve_thinking": true
+    },
+    "message_protocol": {
+      "developer_message_mode": "leading_system_then_user",
+      "mid_history_system_message_mode": "user",
+      "merge_consecutive_user_messages": false,
+      "assistant_tool_call_content_mode": "preserve"
+    },
+    "request_parameter_policy": {
+      "extra_body": {
+        "parallel_tool_calls": true
+      }
+    },
+    "alias": "qwen3.8-flash-next",
+    "compaction_threshold": 160000,
+    "pruning_threshold": 130000,
+    "max_reasoning_tokens": 60000
+  },
+  "qwen-3-8-flash-xhigh": {
+    "url": "http://localhost:44415/v1",
+    "temperature": 1.0,
+    "input_modalities": [
+      "text",
+      "image"
+    ],
+    "output_modalities": [
+      "text"
+    ],
+    "provider": "vllm",
+    "reasoning_effort": "xhigh",
+    "reasoning": {
+      "replay_history": true,
+      "history_field": "reasoning",
+      "forward_reasoning_effort": true,
+      "enable_thinking": true,
+      "preserve_thinking": true
+    },
+    "message_protocol": {
+      "developer_message_mode": "leading_system_then_user",
+      "mid_history_system_message_mode": "user",
+      "merge_consecutive_user_messages": false,
+      "assistant_tool_call_content_mode": "preserve"
+    },
+    "request_parameter_policy": {
+      "extra_body": {
+        "parallel_tool_calls": true
+      }
+    },
+    "alias": "qwen3.8-flash-next",
+    "compaction_threshold": 160000,
+    "pruning_threshold": 130000,
+    "max_reasoning_tokens": 60000
+  },
+  "qwen-3-8-flash-low": {
+    "url": "http://localhost:44415/v1",
+    "temperature": 1.0,
+    "input_modalities": [
+      "text",
+      "image"
+    ],
+    "output_modalities": [
+      "text"
+    ],
+    "provider": "vllm",
+    "reasoning_effort": "low",
+    "reasoning": {
+      "replay_history": true,
+      "history_field": "reasoning",
+      "forward_reasoning_effort": true,
+      "enable_thinking": true,
+      "preserve_thinking": true
+    },
+    "message_protocol": {
+      "developer_message_mode": "leading_system_then_user",
+      "mid_history_system_message_mode": "user",
+      "merge_consecutive_user_messages": false,
+      "assistant_tool_call_content_mode": "preserve"
+    },
+    "request_parameter_policy": {
+      "extra_body": {
+        "parallel_tool_calls": true
+      }
+    },
+    "alias": "qwen3.8-flash-next",
+    "compaction_threshold": 160000,
+    "pruning_threshold": 130000,
+    "max_reasoning_tokens": 60000
+  },
+  "__model_selection__": {
+    "background": {
+      "Exclusive": [
+        "qwen-3-8-flash-medium"
+      ]
+    },
+    "secondary": {
+      "Exclusive": [
+        "qwen-3-8-flash-medium"
+      ]
+    }
+  },
+  "__queues__": [
+    {
+      "provider": "vllm",
+      "url": "http://localhost:44415/v1",
+      "max_parallel": 4
+    }
+  ]
+}

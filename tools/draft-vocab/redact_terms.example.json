@@ -1,0 +1,22 @@
+{
+  "_comment": [
+    "Copy to redact_terms.json (gitignored) and fill in your OWN names,",
+    "project labels and domains. redact.py and verify_corpus.py",
+    "match substring and case-insensitive, so they also hit foo_bar and FooBar.",
+    "Order: longer/ambiguous terms first, so the full name is not already",
+    "broken up by the single-name rule."
+  ],
+  "replace": [
+    { "term": "<USER FULL NAME>", "with": "User" },
+    { "term": "<USER FIRST NAME>", "with": "User" },
+    { "term": "<ASSISTANT NAME>", "with": "Assistant" },
+    { "term": "<INTERNAL PROJECT BRAND>", "with": "Engine" },
+    { "term": "<INTERNAL REPO NAMES>", "with": "repo" },
+    { "term": "<COMPANY DOMAIN>", "with": "example.com" }
+  ],
+  "forbid": [
+    "<INTERNAL PROJECT BRAND>",
+    "<INTERNAL REPO NAMES>",
+    "<COMPANY DOMAIN>"
+  ]
+}

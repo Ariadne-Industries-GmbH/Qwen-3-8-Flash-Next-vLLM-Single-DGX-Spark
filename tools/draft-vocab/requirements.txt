@@ -1,0 +1,6 @@
+# The vocab build only needs the tokenizer (no framework, no download of
+# model weights). pyarrow is only needed for the hf_parquet source.
+transformers>=4.56
+tokenizers>=0.20
+pyarrow>=17
+huggingface_hub>=0.25

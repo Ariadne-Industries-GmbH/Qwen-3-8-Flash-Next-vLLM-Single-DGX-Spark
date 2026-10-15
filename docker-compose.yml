@@ -1,0 +1,445 @@
+# Qwen3.8-Flash-Next NVFP4 (RadixArk) on DGX Spark (GB10/SM121) -- one single
+# k3 profile: 4 parallel requests x 180k context, MTP3, FP8-KV, PLE via mmap.
+#
+# Image chain (reproducible, both pins verified 07.09.2026):
+#   vllm/vllm-openai:qwen38-flash-next@sha256:fc120ece0a388cc0aa1caad4a9f1cd92113484ab7ec2fd0efadd62585be05bf8
+#     (official Qwen3.8-Flash-Next release image, vLLM 0.1.dev20073, CUDA 13.0)
+#   -> blazux/qwen3.8-Flash-DGX @ 656cdb075b57671c9bd6807b57f630fb3c1641fe
+#     (PLE-mmap, GB10 FLA/Mamba-/prefix-cache fixes, deterministic QSA top-k,
+#      FP8-KV patch, PLE range-guard fix for partial last shard)
+#   -> VLLM_IMAGE (default qwen38-flash-dgx:656cdb0), built via
+#     ./scripts/qwen38f-vllm.sh build-image
+#   -> MIA_IMAGE (default qwen38-flash-mia:2) = VLLM_IMAGE + ONE layer with
+#     two anchor-verified pins: (a) MiaAI-Lab reduced-vocab MTP patch
+#     (mia/patch_mtp_draft_vocab.py), (b) MADV_RANDOM for the PLE-mmap views
+#     (mia/patch_ple_mmap_madvise.py; blazux@656cdb0 sets no madvise).
+#     Built via ./scripts/qwen38f-vllm.sh build-image-mia. Profiles: mia and
+#     hybrid (both additive to k3, never in parallel). k3 keeps running on
+#     VLLM_IMAGE alone.
+#
+# KV budgeting via --kv-cache-memory-bytes (hard bytes): vLLM then sizes KV
+# exactly and ignores gpu_memory_utilization for KV sizing ONLY
+# (vllm/config/cache.py, kv_cache_memory_bytes). The startup pool check
+# (request_memory: free >= gpu_memory_utilization * total) stays in force --
+# that is why QFN_GPU_MEMORY_UTILIZATION is set explicitly (vLLM default 0.92
+# would be 111.95 GiB and crashes; 0.80 -> ~97.4 GiB: weights ~78 + KV 11.6 +
+# MTP ~1.5 + overhead ~4-6 GiB).
+#
+# PLE (48 GB FP8 n-gram tables, 10 shards) stay on the NVMe and are served
+# via mmap straight from the local checkpoint dir (VLLM_PLE_MMAP=1) --
+# no separate PLE download, no extra mount.
+
+x-q38f-common: &q38f-common
+  image: ${VLLM_IMAGE:-qwen38-flash-dgx:656cdb0}
+  ipc: host
+  privileged: true
+  gpus: all
+  shm_size: "16gb"
+  restart: "${RESTART_POLICY:-no}"
+  ports:
+    - "${VLLM_PORT:-44415}:${VLLM_PORT:-44415}"
+  # &q38f-env / &q38f-volumes: nested anchors so mia can EXTEND the maps
+  # via the merge-key (<<: *q38f-common replaces whole maps at service-merge
+  # level, it cannot override single entries).
+  environment: &q38f-env
+    HF_HOME: /root/.cache/huggingface
+    XDG_CACHE_HOME: /root/.cache
+    NVIDIA_VISIBLE_DEVICES: all
+    NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    OMP_NUM_THREADS: ${OMP_NUM_THREADS:-4}
+    VLLM_LOGGING_LEVEL: ${VLLM_LOGGING_LEVEL:-INFO}
+    VLLM_CACHE_ROOT: /root/.cache/vllm
+    TRITON_CACHE_DIR: /root/.triton/cache
+    # Main model = local bind -> offline resolution.
+    HF_HUB_OFFLINE: ${HF_HUB_OFFLINE:-1}
+    # PLE n-gram tables (48 GB) mmap'd from the checkpoint dir (NVMe):
+    # vllm_ple_mmap patch lives in the image, active only with VLLM_PLE_MMAP=1.
+    VLLM_PLE_MMAP: "1"
+    VLLM_PLE_MMAP_WORKERS: ${QFN_PLE_MMAP_WORKERS:-32}
+    VLLM_PLE_MMAP_PREWARM: ${QFN_PLE_MMAP_PREWARM:-0}
+    # MADV_RANDOM on the PLE shard views (mia/hybrid only: that patch lives in
+    # the MIA_IMAGE layer; on k3/VLLM_IMAGE it is a no-op, unpatched there).
+    # PLE n-gram lookups are random access: without MADV_RANDOM the read-ahead
+    # window fills the page cache with data that is never read
+    # (MiaAI: 1366 vs 57 KiB SSD read per decoded token, up to ~2 GiB of page
+    # cache wasted -- on the Spark that is the same physical pool as GPU RAM).
+    VLLM_PLE_MMAP_MADV_RANDOM: ${QFN_PLE_MMAP_MADV_RANDOM:-1}
+    # Deterministic QSA top-k kernel: the stock kernel is not deterministic on
+    # GB10 and can drop candidates (vllm#51782, fixed by vllm#55122).
+    # _C_det.so is built with nvcc inside the image; EXACT_TOPK=0 (no long-prefill penalty).
+    VLLM_QSA_DET_TOPK: ${QFN_QSA_DET_TOPK:-1}
+    VLLM_QSA_DET_LIB: /opt/llm/kernel-det/_C_det.so
+    VLLM_QSA_EXACT_TOPK: ${QFN_QSA_EXACT_TOPK:-0}
+    # Sampler as in the reference serve; autotune off (reference serve).
+    VLLM_USE_FLASHINFER_SAMPLER: "1"
+    # M%4 padding for blockwise FP8 GEMMs: relevant in hybrid mode only
+    # (profile hybrid); the blazux patch defaults to ON on sm_12x, hence
+    # explicit 0 -- with --enable-prefix-caching M%4==0 anyway and the patch
+    # is a no-op there (blazux serve.sh also always sets it explicitly).
+    VLLM_FP8_PAD_M4: "0"
+  volumes: &q38f-volumes
+    - type: bind
+      source: ${MODEL_DIR:-../Qwen3.8-Flash-Next-NVFP4-RadixArk}
+      target: /models/qwen3.8-flash-next-nvfp4
+      read_only: true
+    - type: bind
+      source: ${HF_CACHE_DIR:-${HOME}/.cache/huggingface}
+      target: /root/.cache/huggingface
+    - type: bind
+      source: ${VLLM_CACHE_DIR:-${HOME}/.cache/vllm}
+      target: /root/.cache/vllm
+    - type: bind
+      source: ${TRITON_CACHE_DIR:-${HOME}/.triton}
+      target: /root/.triton
+
+services:
+  # k3 (default profile): MTP3 (MTP layers are part of the checkpoint, 31
+  # mtp.* tensors, ~1.5 GB -- no external drafter), 4 parallel requests x
+  # 180k context (KV budget 4 x 190k = 760k tokens @ 11.60 GiB), BF16
+  # Mamba/GDN recurrent state, shared prefill step budget 8192 (one chunk
+  # budget for all parallel requests, no per-request cap).
+  # Profile mia is the add-on: plus reduced MTP draft vocab, explicit
+  # CUDA-graph capture widths and the V2 model runner (see below).
+  # Reference measurements (MiaAI-Lab, 06.09.2026, same Spark type, V2 runner):
+  # K-sweep 0/1/2/3: K=3 wins at every concurrency; 4 streams ~28.4 tok/s
+  # (short context); expectation for 4x180k decode ~20-25 tok/s per stream.
+  q38f-k3:
+    <<: *q38f-common
+    profiles:
+      - k3
+    container_name: q38f-k3-vllm
+    command:
+      - /models/qwen3.8-flash-next-nvfp4
+      - --served-model-name
+      - ${SERVED_MODEL_NAME:-qwen3.8-flash-next}
+      - --host
+      - 0.0.0.0
+      - --port
+      - ${VLLM_PORT:-44415}
+      - --tensor-parallel-size
+      - "1"
+      # Quantization is derived from the checkpoint (modelopt NVFP4) --
+      # no --quantization flag (the reference serve sets none).
+      # FP8-KV on the QSA path (patch in the image; measured ~1.22M KV tokens).
+      # BF16-KV (auto) would be marginal here (720k needed vs ~737k-800k
+      # capacity without reserve) -- FP8-KV is what gives the 4.22x headroom.
+      - --kv-cache-dtype
+      - ${QFN_KV_CACHE_DTYPE:-fp8_e4m3}
+      # GDN/Mamba recurrent state: the checkpoint grows it as float32; bfloat16
+      # halves the ~0.23 GB/seq traffic (measured: +8.5 % decode at 8 streams,
+      # acceptance and needles unchanged -- MiaAI-Lab, 06.09.2026).
+      - --mamba-ssm-cache-dtype
+      - ${QFN_MAMBA_SSM_CACHE_DTYPE:-bfloat16}
+      - --speculative-config
+      - '{"method":"mtp","num_speculative_tokens":${QFN_MTP_NUM_SPECULATIVE_TOKENS:-3}}'
+      - --max-model-len
+      - ${QFN_MAX_MODEL_LEN:-180000}
+      - --gpu-memory-utilization
+      - ${QFN_GPU_MEMORY_UTILIZATION:-0.80}
+      - --max-num-seqs
+      - ${QFN_MAX_NUM_SEQS:-4}
+      - --kv-cache-memory-bytes
+      - ${QFN_KV_CACHE_MEMORY_BYTES:-12459440000}
+      # Shared prefill/decode scheduler budget: 8192 across all requests.
+      # No per-request long-prefill threshold is configured.
+      - --max-num-batched-tokens
+      - ${QFN_MAX_NUM_BATCHED_TOKENS:-8192}
+      # Note: --max-num-partial-prefills / --max-long-partial-prefills
+      # do NOT exist in this preview build's CLI (unknown flag
+      # => immediate exit 2). With the threshold flag removed there is no
+      # per-request prefill shaping left to configure.
+      - --enable-chunked-prefill
+      # Correct with this image (Mamba block_size fix in the patch set):
+      # repeated prefixes (tool loops, multi-turn) skip the prefill.
+      - --enable-prefix-caching
+      # PLE-mmap gather is a CPU op + pageable H2D copy and MUST run outside
+      # CUDA graphs: PIECEWISE capture with the PLE lookup as a
+      # splitting op (1:1 from the reference serve; do NOT shorten or remove).
+      - --compilation-config
+      - '{"cudagraph_mode":"PIECEWISE","splitting_ops":["vllm::unified_attention_with_output","vllm::unified_mla_attention_with_output","vllm::mamba_mixer2","vllm::mamba_mixer","vllm::short_conv","vllm::qwen3_8_flash_next_ple_short_conv","vllm::qwen3_8_flash_next_qsa_with_output","vllm::linear_attention","vllm::qwen_gdn_attention_core","vllm::qwen_gdn_attention_core_fused_norm_packed","vllm::sparse_attn_indexer","vllm::ple_mmap_lookup"]}'
+      - --load-format
+      - safetensors
+      - --no-enable-flashinfer-autotune
+      - --reasoning-parser
+      - qwen3
+      - --tool-call-parser
+      - qwen3_coder
+      - --enable-auto-tool-choice
+      # Thinking/reasoning parameters (Qwen3.8 README best practice). These
+      # values take effect when a request omits its own sampling parameters.
+      # reasoning_effort itself comes client-side (xhigh/medium/low; the
+      # Qwen3.8-Flash-Next template does NOT accept "high").
+      - --override-generation-config
+      - '{"temperature":1.0,"top_p":0.95,"top_k":20,"min_p":0.0,"presence_penalty":0.0,"repetition_penalty":1.0,"do_sample":true}'
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:${VLLM_PORT:-44415}/v1/models >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 40
+      start_period: 900s
+
+  # mia (add-on to k3, NOT a replacement): the k3 configuration plus the
+  # MiaAI-Lab performance optimizations on the same Spark hardware type:
+  #   (1) reduced MTP draft vocab (65.5k token IDs instead of 248.3k): the drafter
+  #       reads the 1.27 GB BF16 lm_head once per draft step, three times per engine step (MTP3); the 65.5k-
+  #       row slice is ~0.34 GB -> ~2.8 GB less memory traffic per step.
+  #       Draft argmax over the reduced head; drafts that miss are
+  #       rejected by the target model at verification (output identity
+  #       stays guaranteed) -- MiaAI-Lab: +26 % (85.9 -> 108.1 tok/s).
+  #   (2) explicit CUDA graph capture widths [4,8,12,16] = (1+K)*S for
+  #       S=1..4, K=3: the vLLM default list lacks 12 -> a 3-stream verify
+  #       (12 tokens) would run eager. PIECEWISE stays (PLE-mmap lookup MUST
+  #       stay outside the graphs); MiaAI's FULL mode would be impossible with PLE.
+  #   (3) VLLM_USE_V2_MODEL_RUNNER=1: prevents the MTP draft config
+  #       copy from downgrading the runner to V1 (MiaAI-Lab: -24 %
+  #       single-stream step time if that happens).
+  # Everything else (KV, MTP3, FP8-KV, PLE-mmap, 4x180k) is 1:1 k3.
+  # Build: ./scripts/qwen38f-vllm.sh build-image-mia (needs VLLM_IMAGE as
+  # base). A/B test: down -> k3 or mia -> kv -> test/bench_mixed.py.
+  q38f-mia:
+    <<: *q38f-common
+    image: ${MIA_IMAGE:-qwen38-flash-mia:2}
+    profiles:
+      - mia
+    container_name: q38f-mia-vllm
+    environment:
+      <<: *q38f-env
+      # Pin the V2 runner (see mia comment (3) above).
+      VLLM_USE_V2_MODEL_RUNNER: "1"
+      # Reduced draft vocab; the image carries the patch that mounts the file
+      # as /root/draft_vocab.txt (VLLM_MTP_DRAFT_VOCAB).
+      VLLM_MTP_DRAFT_VOCAB: /root/draft_vocab.txt
+      # MADV_RANDOM is already in the shared environment anchor
+      # (QFN_PLE_MMAP_MADV_RANDOM); the image ships the matching patch.
+    # Volumes: merge-keys work in YAML for mappings only, not for
+    # sequences -- that is why the four common volumes (identical to
+    # x-q38f-common) plus the draft vocab are listed explicitly here.
+    volumes:
+      - type: bind
+        source: ${MODEL_DIR:-../Qwen3.8-Flash-Next-NVFP4-RadixArk}
+        target: /models/qwen3.8-flash-next-nvfp4
+        read_only: true
+      - type: bind
+        source: ${HF_CACHE_DIR:-${HOME}/.cache/huggingface}
+        target: /root/.cache/huggingface
+      - type: bind
+        source: ${VLLM_CACHE_DIR:-${HOME}/.cache/vllm}
+        target: /root/.cache/vllm
+      - type: bind
+        source: ${TRITON_CACHE_DIR:-${HOME}/.triton}
+        target: /root/.triton
+      # Draft vocab file (65536 token IDs, one per line); gitignored,
+      # generated via ./scripts/qwen38f-vllm.sh draft-vocab.
+      - type: bind
+        source: ${DRAFT_VOCAB_FILE:-./mia/draft_vocab_public.txt}
+        target: /root/draft_vocab.txt
+        read_only: true
+    command:
+      - /models/qwen3.8-flash-next-nvfp4
+      - --served-model-name
+      - ${SERVED_MODEL_NAME:-qwen3.8-flash-next}
+      - --host
+      - 0.0.0.0
+      - --port
+      - ${VLLM_PORT:-44415}
+      - --tensor-parallel-size
+      - "1"
+      - --kv-cache-dtype
+      - ${QFN_KV_CACHE_DTYPE:-fp8_e4m3}
+      - --mamba-ssm-cache-dtype
+      - ${QFN_MAMBA_SSM_CACHE_DTYPE:-bfloat16}
+      # MTP3 + reduced-draft-argmax: the drafter reads only the 65.5k-row
+      # slice of the lm_head (patch in MIA_IMAGE); the speculator calls that path
+      # exclusively under use_local_argmax_reduction.
+      - --speculative-config
+      - '{"method":"mtp","num_speculative_tokens":${QFN_MTP_NUM_SPECULATIVE_TOKENS:-3},"use_local_argmax_reduction":true}'
+      - --max-model-len
+      - ${QFN_MAX_MODEL_LEN:-180000}
+      - --gpu-memory-utilization
+      - ${QFN_GPU_MEMORY_UTILIZATION:-0.80}
+      - --max-num-seqs
+      - ${QFN_MAX_NUM_SEQS:-4}
+      - --kv-cache-memory-bytes
+      - ${QFN_KV_CACHE_MEMORY_BYTES:-12459440000}
+      # Identical to k3 (shared step budget 8192, no per-request cap).
+      - --max-num-batched-tokens
+      - ${QFN_MIA_MAX_NUM_BATCHED_TOKENS:-${QFN_MAX_NUM_BATCHED_TOKENS:-8192}}
+      - --enable-chunked-prefill
+      - --enable-prefix-caching
+      # PIECEWISE stays (PLE lookup is a CPU op + pageable H2D copy and MUST
+      # run outside the graphs); explicit capture widths [4,8,12,16] =
+      # (1+3)*S for S=1..4: every verify-batch the scheduler can build
+      # gets a graph (the vLLM default would have lacked 12 -> eager).
+      - --compilation-config
+      - '{"cudagraph_mode":"PIECEWISE","cudagraph_capture_sizes":[${QFN_MIA_CUDAGRAPH_CAPTURE_SIZES:-4,8,12,16}],"splitting_ops":["vllm::unified_attention_with_output","vllm::unified_mla_attention_with_output","vllm::mamba_mixer2","vllm::mamba_mixer","vllm::short_conv","vllm::qwen3_8_flash_next_ple_short_conv","vllm::qwen3_8_flash_next_qsa_with_output","vllm::linear_attention","vllm::qwen_gdn_attention_core","vllm::qwen_gdn_attention_core_fused_norm_packed","vllm::sparse_attn_indexer","vllm::ple_mmap_lookup"]}'
+      - --load-format
+      - safetensors
+      - --no-enable-flashinfer-autotune
+      - --reasoning-parser
+      - qwen3
+      - --tool-call-parser
+      - qwen3_coder
+      - --enable-auto-tool-choice
+      - --override-generation-config
+      - '{"temperature":1.0,"top_p":0.95,"top_k":20,"min_p":0.0,"presence_penalty":0.0,"repetition_penalty":1.0,"do_sample":true}'
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:${VLLM_PORT:-44415}/v1/models >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 40
+      start_period: 900s
+
+  # hybrid (add-on to k3/mia, NOT a replacement): the mia profile plus the blazux
+  # FP8-hybrid checkpoint. That converts the ~15 GiB of BF16 side layers (GDN
+  # in/out projections, QSA q/k/v/o, shared experts) of the existing
+  # RadixArk checkpoint locally into blockwise FP8-e4m3 (128x128
+  # blocks, DeepSeek layout); the NVFP4 routed experts stay untouched.
+  # Reference blazux/qwen3.8-Flash-DGX @ 656cdb0 (README "Two checkpoint
+  # modes" + docs/HOW-IT-WORKS.md): ~7 GiB fewer resident weights, ~+20 %
+  # decode, same quality (agentic tournament 45/51 vs 45/51).
+  #
+  # The required dispatch shim (vllm_fp8_hybrid_modelopt.py + hooks in
+  # modelopt.py/qsa.py) is ALREADY part of the base image VLLM_IMAGE (blazux
+  # Dockerfile patch 6) -- no extra patch; it is inert without
+  # VLLM_FP8_HYBRID=1 and harmless on a pure NVFP4 checkpoint.
+  #
+  # Prerequisites (in this order):
+  #   1. ./scripts/qwen38f-vllm.sh prepare-hybrid   (once, the server must
+  #      be down; creates QFN_HYBRID_MODEL_DIR as a HARDLINK clone -- only the 4
+  #      converted shards + the index are real files, ~7.7 GiB of disk. The
+  #      snapshot carries no symlinks, so this single bind mount suffices)
+  #   2. ./scripts/qwen38f-vllm.sh build-image-mia  (MIA_IMAGE with the mia layer)
+  #   3. ./scripts/qwen38f-vllm.sh hybrid
+  #
+  # IMPORTANT: never serve the hybrid snapshot without VLLM_FP8_HYBRID=1 --
+  # depending on the loader the mixed NVFP4/FP8 configuration either fails to
+  # load or silently mis-handles weights (user research 10.09.2026).
+  # The 65,536-entry draft vocab stays untouched: tokenizer and token IDs
+  # do not change through the conversion; MTP weights live in other
+  # shards (the converter TARGETS regex only matches linear_attn/self_attn/
+  # shared_expert projections).
+  q38f-hybrid:
+    <<: *q38f-common
+    image: ${MIA_IMAGE:-qwen38-flash-mia:2}
+    profiles:
+      - hybrid
+    container_name: q38f-hybrid-vllm
+    environment:
+      <<: *q38f-env
+      VLLM_USE_V2_MODEL_RUNNER: "1"
+      VLLM_MTP_DRAFT_VOCAB: /root/draft_vocab.txt
+      # Enable hybrid mode (dispatch shim in the base image, see above).
+      VLLM_FP8_HYBRID: "1"
+      # DeepGEMM off, because the blockwise FP8 path of the side layers would
+      # otherwise hit a kernel path that was not built for it (blazux
+      # serve.sh sets both together: HYBRID_ENV = FP8_HYBRID + DEEP_GEMM=0).
+      VLLM_USE_DEEP_GEMM: ${QFN_HYBRID_USE_DEEP_GEMM:-0}
+      # Historical PLE prefetch experiment, retained in this configuration.
+      # No production gain was observed; 8192-token scheduling improved prefill.
+      # 0 disables prefetch in the bind-mounted module.
+      VLLM_PLE_MMAP_PREFETCH: ${QFN_PLE_MMAP_PREFETCH:-1}
+    # Volumes: four common volumes + draft vocab + hybrid snapshot location.
+    # The snapshot is a hardlink clone (prepare_hybrid_snapshot.sh), so real
+    # file names inside the snapshot dir: ONLY the snapshot directory
+    # itself has to be mounted, read_only is not a problem. The
+    # .bf16.bak names next to them are just extra hardlinks onto the original inodes
+    # (0 bytes) and do not appear in the index -> they are never loaded.
+    volumes:
+      - type: bind
+        source: ${HF_CACHE_DIR:-${HOME}/.cache/huggingface}
+        target: /root/.cache/huggingface
+      - type: bind
+        source: ${VLLM_CACHE_DIR:-${HOME}/.cache/vllm}
+        target: /root/.cache/vllm
+      - type: bind
+        source: ${TRITON_CACHE_DIR:-${HOME}/.triton}
+        target: /root/.triton
+      - type: bind
+        source: ${DRAFT_VOCAB_FILE:-./mia/draft_vocab_public.txt}
+        target: /root/draft_vocab.txt
+        read_only: true
+      - type: bind
+        source: ${QFN_HYBRID_MODEL_DIR:-../Qwen3.8-Flash-Next-NVFP4-RadixArk-fp8hybrid}
+        target: /models/qwen3.8-flash-next-nvfp4
+        read_only: true
+      # Historical prefetch experiment (no measured production improvement):
+      # batched WILLNEED prefetch (MiaAI backport, ple_patches/ple_prefetch_patch.py)
+      # plus the original's .bak. Mounted over the image module so the patch survives
+      # a container recreate (container files in the writable layer
+      # would be gone otherwise). Both files are versioned inputs; if missing,
+      # the hybrid start produces them on demand: extract the unpatched module from
+      # MIA_IMAGE (docker create/cp) and run the anchor-verified patch over it,
+      # identical to the checked-in result.
+      # If they are missing and nothing could be produced, the start aborts with a message.
+      # QFN_PLE_PATCH_DIR redirects the target directory (default: ple_patches/).
+      # read_only: false because vLLM creates __pycache__ next to it (harmless).
+      - type: bind
+        source: ${QFN_PLE_PATCH_DIR:-./ple_patches}/vllm_ple_mmap_patched.py
+        target: /usr/local/lib/python3.12/dist-packages/vllm_ple_mmap.py
+      - type: bind
+        source: ${QFN_PLE_PATCH_DIR:-./ple_patches}/vllm_ple_mmap_orig_backup.py
+        target: /usr/local/lib/python3.12/dist-packages/vllm_ple_mmap.py.bak
+    command:
+      - /models/qwen3.8-flash-next-nvfp4
+      - --served-model-name
+      - ${SERVED_MODEL_NAME:-qwen3.8-flash-next}
+      - --host
+      - 0.0.0.0
+      - --port
+      - ${VLLM_PORT:-44415}
+      - --tensor-parallel-size
+      - "1"
+      - --kv-cache-dtype
+      - ${QFN_KV_CACHE_DTYPE:-fp8_e4m3}
+      - --mamba-ssm-cache-dtype
+      - ${QFN_MAMBA_SSM_CACHE_DTYPE:-bfloat16}
+      # MTP3 + reduced-draft-argmax (identical to mia; the hybrid conversion did
+      # not touch the MTP weights).
+      #  (17.09.2026 overnight ablation: MTP=0 tested -> single-stream 16 tok/s
+      #  instead of 11 (MTP3), 4-stream neutral ~1.2. MTP3 stays default; MTP=0
+      #  is a deliberate daytime decision, ABLATION_2026-09-17_nacht.md.)
+      - --speculative-config
+      - '{"method":"mtp","num_speculative_tokens":${QFN_MTP_NUM_SPECULATIVE_TOKENS:-3},"use_local_argmax_reduction":true}'
+      - --max-model-len
+      - ${QFN_MAX_MODEL_LEN:-180000}
+      # gpu-memory-utilization stays at 0.80: the pool check is the entry gate;
+      # the ~7 GiB saved flows back into that same pool. The
+      # KV pool is hard-budgeted and does NOT grow automatically -- anyone who
+      # wants the gain in KV instead of system RAM raises QFN_KV_CACHE_MEMORY_BYTES
+      # deliberately (docs/hybrid-profile.md).
+      - --gpu-memory-utilization
+      - ${QFN_GPU_MEMORY_UTILIZATION:-0.80}
+      - --max-num-seqs
+      - ${QFN_MAX_NUM_SEQS:-4}
+      - --kv-cache-memory-bytes
+      - ${QFN_KV_CACHE_MEMORY_BYTES:-12459440000}
+      # Identical to k3/mia (shared step budget 8192, no per-request
+      # threshold, 01.10.2026 -- see k3 comment for the reasoning).
+      - --max-num-batched-tokens
+      - ${QFN_MIA_MAX_NUM_BATCHED_TOKENS:-${QFN_MAX_NUM_BATCHED_TOKENS:-8192}}
+      - --enable-chunked-prefill
+      - --enable-prefix-caching
+      # PIECEWISE + capture widths 1:1 as in mia (PLE lookup stays outside
+      # the graphs; blockwise FP8 GEMMs are captured as in the reference).
+      - --compilation-config
+      - '{"cudagraph_mode":"PIECEWISE","cudagraph_capture_sizes":[${QFN_MIA_CUDAGRAPH_CAPTURE_SIZES:-4,8,12,16}],"splitting_ops":["vllm::unified_attention_with_output","vllm::unified_mla_attention_with_output","vllm::mamba_mixer2","vllm::mamba_mixer","vllm::short_conv","vllm::qwen3_8_flash_next_ple_short_conv","vllm::qwen3_8_flash_next_qsa_with_output","vllm::linear_attention","vllm::qwen_gdn_attention_core","vllm::qwen_gdn_attention_core_fused_norm_packed","vllm::sparse_attn_indexer","vllm::ple_mmap_lookup"]}'
+      - --load-format
+      - safetensors
+      - --no-enable-flashinfer-autotune
+      # (17.09.2026 ablation: fix C --enable-logging-iteration-details removed --
+      #  invasive per-iteration logging; in the V1 async build that metric only measures
+      #  the remaining wait after execute_model(non_block=True). PLE telemetry +
+      #  1-Hz sampler replace it.)
+      - --reasoning-parser
+      - qwen3
+      - --tool-call-parser
+      - qwen3_coder
+      - --enable-auto-tool-choice
+      - --override-generation-config
+      - '{"temperature":1.0,"top_p":0.95,"top_k":20,"min_p":0.0,"presence_penalty":0.0,"repetition_penalty":1.0,"do_sample":true}'
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:${VLLM_PORT:-44415}/v1/models >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 40
+      start_period: 900s

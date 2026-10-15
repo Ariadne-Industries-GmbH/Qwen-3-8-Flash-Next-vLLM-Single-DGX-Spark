@@ -1,0 +1,105 @@
+{
+  "artifact_sha256": "b8110db237726433d12ac2ec9ee722eeb30ac90a0f606abe83d5fec92bd8fa0d",
+  "corpus_manifest": {
+    "code": {
+      "attribution": [
+        "Hugging Face Transformers",
+        "Python Software Foundation",
+        "vLLM project"
+      ],
+      "bytes": 57671680,
+      "downloads": {
+        "https://codeload.github.com/huggingface/transformers/tar.gz/dbea10932a0e18f40d8103a3bae6fa7927f8d36e": "70b79444b9b22908c29c641316475d0b913a5e8e12a7c0ee8f4bccd1bb79a402",
+        "https://codeload.github.com/python/cpython/tar.gz/d8a1072491069b825edcfef66a06761e074da18a": "b1e0dcf8f10455426c88b83bfe42b1c247b735d88b2163e759c8ca73b7ad63c1",
+        "https://codeload.github.com/vllm-project/vllm/tar.gz/e0705731be04aac90838f318fcdae15c56a53080": "e3d2b5a0a6eff66239aa1ac8447ce42d7f0074934638b4b875112705b697b512"
+      },
+      "license": [
+        "Apache-2.0",
+        "PSF-2.0 / GPL-3.0+ (CPython)"
+      ],
+      "revs": [
+        "d8a1072491069b825edcfef66a06761e074da18a",
+        "dbea10932a0e18f40d8103a3bae6fa7927f8d36e",
+        "e0705731be04aac90838f318fcdae15c56a53080"
+      ],
+      "sha256": "dde12d4bf71abaf3f5ba9e7fc21f1f940b980b5227bf47b3fe7494d0fae38d04",
+      "sources": [
+        "https://codeload.github.com/vllm-project/vllm/tar.gz/e0705731be04aac90838f318fcdae15c56a53080",
+        "https://codeload.github.com/huggingface/transformers/tar.gz/dbea10932a0e18f40d8103a3bae6fa7927f8d36e",
+        "https://codeload.github.com/python/cpython/tar.gz/d8a1072491069b825edcfef66a06761e074da18a"
+      ]
+    },
+    "english": {
+      "attribution": [
+        "WikiText-103 (Salesforce, Merity et al. 2016)"
+      ],
+      "bytes": 419430400,
+      "downloads": {
+        "https://huggingface.co/datasets/Salesforce/wikitext/resolve/b08601e04326c79dfdd32d625aee71d232d685c3/wikitext-103-raw-v1/train-00000-of-00002.parquet": "74da360f23826045b3e6ac6375411fdb15f003030aa74f2596ed08b857cb9212",
+        "https://huggingface.co/datasets/Salesforce/wikitext/resolve/b08601e04326c79dfdd32d625aee71d232d685c3/wikitext-103-raw-v1/train-00001-of-00002.parquet": "ba090ac30dbf5461e8dcbdd1a1b8e6f3cf9c2c756d64f0c1220450acd514f720"
+      },
+      "license": [
+        "CC BY-SA 3.0",
+        "GFDL"
+      ],
+      "revs": [
+        "b08601e04326c79dfdd32d625aee71d232d685c3"
+      ],
+      "sha256": "a4c76d5b47597bf9ec89fde4b877c480c22f6dcd77cfe32693019cf539c9cf46",
+      "sources": [
+        "wikitext-103-raw-v1/train-00000-of-00002.parquet",
+        "wikitext-103-raw-v1/train-00001-of-00002.parquet"
+      ]
+    },
+    "german": {
+      "attribution": [
+        "German Wikipedia article dump 2026-09-01 (Wikimedia GmbH)"
+      ],
+      "bytes": 419430400,
+      "downloads": {
+        "https://dumps.wikimedia.org/dewiki/20260901/dewiki-20260901-pages-articles2.xml-p297013p1262093.bz2": null
+      },
+      "license": [
+        "CC BY-SA 4.0"
+      ],
+      "revs": [
+        "20260901"
+      ],
+      "sha256": "631b98bb65b9162d46690f7e6b4b434ef32b769f86e31b8348cf7e53dc886050",
+      "sources": [
+        "https://dumps.wikimedia.org/dewiki/20260901/dewiki-20260901-pages-articles2.xml-p297013p1262093.bz2"
+      ]
+    }
+  },
+  "model": {
+    "name": "Qwen3.8-Flash-Next-NVFP4-RadixArk",
+    "tokenizer_sha256": {
+      "tokenizer.json": "0997f410c57a1f4e53b09e4be8f4a172d90edd9564368fb0847030937229b9f3",
+      "tokenizer_config.json": "b11349aafa7cdc6a320767cf7ceb29ed82f7eda5d65e8e0819e76f0ce947bf27"
+    }
+  },
+  "size": 65536,
+  "sources": {
+    "corpus/code.txt": {
+      "distinct_ids": 44865,
+      "sha256": "dde12d4bf71abaf3f5ba9e7fc21f1f940b980b5227bf47b3fe7494d0fae38d04",
+      "weight": 3
+    },
+    "corpus/english.txt": {
+      "distinct_ids": 79513,
+      "sha256": "a4c76d5b47597bf9ec89fde4b877c480c22f6dcd77cfe32693019cf539c9cf46",
+      "weight": 1
+    },
+    "corpus/german.txt": {
+      "distinct_ids": 97089,
+      "sha256": "631b98bb65b9162d46690f7e6b4b434ef32b769f86e31b8348cf7e53dc886050",
+      "weight": 3
+    }
+  },
+  "vocab_size": 248077,
+  "weights": {
+    "corpus/code.txt": 3,
+    "corpus/english.txt": 1,
+    "corpus/german.txt": 3
+  }
+}

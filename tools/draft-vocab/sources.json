@@ -1,0 +1,83 @@
+{
+  "note": "Public sources for the draft vocab. Pinning: 'repo_rev' is always set (revision or dump date). For files whose 'sha256' is filled in, build_public_corpus.py checks the hash strictly. The tarballs are deliberately not pinned by hash, because GitHub archives can be repacked after the fact; the hash observed during the build is recorded in corpus/manifest.json under 'downloads' (observed_sha256 here is only a reference). 'observed_sha256' is not enforced. Pins verified as of 2026-09-16. No path in this file points at private material.",
+  "sources": [
+    {
+      "attribution": "WikiText-103 (Salesforce, Merity et al. 2016)",
+      "files": [
+        {
+          "column": "text",
+          "path": "wikitext-103-raw-v1/train-00000-of-00002.parquet",
+          "sha256": "74da360f23826045b3e6ac6375411fdb15f003030aa74f2596ed08b857cb9212"
+        },
+        {
+          "column": "text",
+          "path": "wikitext-103-raw-v1/train-00001-of-00002.parquet",
+          "sha256": "ba090ac30dbf5461e8dcbdd1a1b8e6f3cf9c2c756d64f0c1220450acd514f720"
+        }
+      ],
+      "id": "english",
+      "kind": "hf_parquet",
+      "license": "CC BY-SA 3.0 / GFDL",
+      "repo": "Salesforce/wikitext",
+      "repo_rev": "b08601e04326c79dfdd32d625aee71d232d685c3"
+    },
+    {
+      "attribution": "German Wikipedia article dump 2026-09-01 (Wikimedia GmbH)",
+      "files": [
+        {
+          "extractor": "mediawiki_xml",
+          "path": "https://dumps.wikimedia.org/dewiki/20260901/dewiki-20260901-pages-articles2.xml-p297013p1262093.bz2",
+          "sha256": ""
+        }
+      ],
+      "id": "german",
+      "kind": "wikimedia_dump",
+      "license": "CC BY-SA 4.0",
+      "repo": "dewiki",
+      "repo_rev": "20260901"
+    },
+    {
+      "attribution": "vLLM project",
+      "id": "code",
+      "include": [
+        "*.py"
+      ],
+      "kind": "github_tarball",
+      "license": "Apache-2.0",
+      "max_mib": 25,
+      "observed_sha256": "e3d2b5a0a6eff66239aa1ac8447ce42d7f0074934638b4b875112705b697b512",
+      "repo": "vllm-project/vllm",
+      "repo_rev": "e0705731be04aac90838f318fcdae15c56a53080",
+      "url": "https://codeload.github.com/vllm-project/vllm/tar.gz/e0705731be04aac90838f318fcdae15c56a53080"
+    },
+    {
+      "attribution": "Hugging Face Transformers",
+      "id": "code",
+      "include": [
+        "*.py"
+      ],
+      "kind": "github_tarball",
+      "license": "Apache-2.0",
+      "max_mib": 15,
+      "observed_sha256": "70b79444b9b22908c29c641316475d0b913a5e8e12a7c0ee8f4bccd1bb79a402",
+      "repo": "huggingface/transformers",
+      "repo_rev": "dbea10932a0e18f40d8103a3bae6fa7927f8d36e",
+      "url": "https://codeload.github.com/huggingface/transformers/tar.gz/dbea10932a0e18f40d8103a3bae6fa7927f8d36e"
+    },
+    {
+      "attribution": "Python Software Foundation",
+      "id": "code",
+      "include": [
+        "*.py",
+        "*.c"
+      ],
+      "kind": "github_tarball",
+      "license": "PSF-2.0 / GPL-3.0+ (CPython)",
+      "max_mib": 15,
+      "observed_sha256": "b1e0dcf8f10455426c88b83bfe42b1c247b735d88b2163e759c8ca73b7ad63c1",
+      "repo": "python/cpython",
+      "repo_rev": "d8a1072491069b825edcfef66a06761e074da18a",
+      "url": "https://codeload.github.com/python/cpython/tar.gz/d8a1072491069b825edcfef66a06761e074da18a"
+    }
+  ]
+}
